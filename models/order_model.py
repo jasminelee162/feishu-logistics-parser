@@ -56,6 +56,21 @@ class Order:
     remark: Optional[str] = None
     items: List[OrderItem] = field(default_factory=list)
 
+    # 以下为校验/审计支持字段
+    # 存放校验发现的标记，例如: '地址存疑','数量不一致','重量异常','需人工复核' 等
+    validation_flags: List[str] = field(default_factory=list)
+    # 更详细的校验说明（例如偏差值、缺失字段说明）
+    validation_notes: Optional[str] = None
+    # 解析阶段收集的地址候选列表（用于地址冲突检测）
+    address_candidates: List[str] = field(default_factory=list)
+    # 简单置信度评估（0.0 - 1.0），解析器可填写
+    confidence: Optional[float] = None
+
+    # 如果校验器需要产生拆分结果，可放在这里（可选，通常 validate 返回多个 Order）
+    split_from: Optional[str] = None
+    # 识别时间（可由外部在解析/调用时设置），格式为字符串或 datetime，最终写入飞书时会被转换为 unix timestamp
+    recognition_time: Optional[str] = None
+
     def to_dict(self) -> dict:
         """返回可序列化字典（便于打印/存储）。"""
         return asdict(self)

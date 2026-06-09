@@ -90,29 +90,42 @@ class XYZParser:
             order.eta = m.group(2) if m.lastindex == 2 else m.group(1).strip()
         logger.info("[XYZParser] 预估抵达日期: %s", order.eta)
 
-        # ========== 4) 发货地（匹配"发货地"到"Incoterns"之间的内容） ==========
+        # ========== 4) 发货地（更稳健地匹配：发货地 到 下一个已知标签/关键词 之间的内容） ==========
         sender_addr = None
-        # 方法1：匹配"发货地"到"Incoterns"之间的内容
-        m = re.search(r"发货地\s*\n([\s\S]*?)Incoterns", text)
+        # 关键标签集合：尽可能覆盖文档中常见的后续字段，避免贪婪匹配整份文档
+        tail_keywords = [
+            r"Incoterns", r"送货地址", r"收货人", r"联系电话", r"电话",
+            r"预估抵达日期", r"预计抵达", r"ETA", r"External ID", r"运输方式",
+            r"重量", r"总净重", r"总毛重", r"产品编码", r"明细"
+        ]
+
+        # 构建正则，非贪婪匹配直到下一个标签（忽略大小写）
+        tail_pat = r"|".join(tail_keywords)
+        pattern = re.compile(rf"发货地[:：]?\s*(.*?)\s*(?=(?:{tail_pat})|$)", re.DOTALL | re.IGNORECASE)
+        m = pattern.search(text)
         if m:
             sender_addr = m.group(1).strip()
-            # 清理：将换行符替换为空格，压缩多余空白
-            sender_addr = re.sub(r'\s+', ' ', sender_addr)
-        
-        # 方法2：如果没有 Incoterns，匹配"发货地"到下一个关键字
+            sender_addr = re.sub(r"\s+", " ", sender_addr)
+
+        # 备用：从清洗后的文本中匹配包含公司关键词的单行
         if not sender_addr:
-            m = re.search(r"发货地\s*\n([^\n]+(?:公司|有限公司)[^\n]*)", clean_text)
+            m = re.search(r"发货地[:：]?\s*([^\n]{5,200}?(?:公司|有限公司)[^\n]*)", clean_text)
             if m:
                 sender_addr = m.group(1).strip()
-        
-        # 方法3：简单匹配发货地后的一行
+
+        # 最后再尝试简短行匹配
         if not sender_addr:
             m = re.search(r"发货地[:：]?\s*([^\n]+)", clean_text)
             if m:
                 sender_addr = m.group(1).strip()
-        
+
         if sender_addr:
             order.sender_address = sender_addr
+            # 收集为地址候选，供 validator 使用
+            order.address_candidates = getattr(order, 'address_candidates', [])
+            if sender_addr not in order.address_candidates:
+                order.address_candidates.append(sender_addr)
+
         logger.info("[XYZParser] 发货地: %s", order.sender_address)
 
         # ========== 5) 收货地址 ==========
@@ -237,7 +250,53 @@ class XYZParser:
             if code not in unique_products:
                 unique_products.append(code)
         
-        order.detail_count = len(unique_products)
+        # 将产品编码写入 order，并尝试从编码附近提取对应的件数（qty）
+        from models.order_model import OrderItem
+
+        order.items = []
+        for code in unique_products:
+            qty = None
+            # 尝试在产品块中查找 code 后面跟随的 件数/数量
+            # 限定查找范围为 code 出现后的 200 字符以内
+            m_code_pos = re.search(re.escape(code), text)
+            if m_code_pos:
+                start = m_code_pos.end()
+                tail = text[start:start+200]
+                m_qty = re.search(r"件数[:：]?\s*(\d{1,6})", tail)
+                if not m_qty:
+                    m_qty = re.search(r"数量[:：]?\s*(\d{1,6})", tail)
+                if m_qty:
+                    try:
+                        qty = int(m_qty.group(1))
+                    except Exception:
+                        qty = None
+
+            # 如果没有找到与 code 直接关联的数量，尝试在整个产品区块中寻找第一个未分配的 件数
+            if qty is None:
+                # 在 product_section（若存在）或全文中寻找件数
+                search_scope = product_section if 'product_section' in locals() and product_section else text
+                all_q = re.findall(r"件数[:：]?\s*(\d{1,6})", search_scope)
+                if all_q:
+                    try:
+                        qty = int(all_q[0])
+                    except Exception:
+                        qty = None
+
+            order.items.append(OrderItem(sku=code, qty=qty))
+
+        # 明细行数按所有明细的数量之和定义（若 qty 可用则求和）
+        sum_qty = 0
+        qty_found = False
+        for it in order.items:
+            if it.qty is not None:
+                sum_qty += int(it.qty)
+                qty_found = True
+
+        if qty_found:
+            order.detail_count = sum_qty
+        else:
+            # 退回兼容行为：若没有 qty 信息，仍保持为不同商品种类数（兼容旧逻辑）
+            order.detail_count = len(unique_products)
         
         # ========== 详细日志输出（便于调试） ==========
         logger.info("[XYZParser] ========== 解析结果汇总 ==========")

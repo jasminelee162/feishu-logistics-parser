@@ -1,7 +1,9 @@
 from typing import Any, Dict, Optional
+import re
 import logging
 import time
 import requests
+import datetime
 
 from config.settings import SETTINGS
 
@@ -91,6 +93,10 @@ class FeishuBitableClient:
             "订单编号": getattr(order, "order_no", ""),
             "发货单号": getattr(order, "delivery_no", ""),
             "识别状态": "成功",
+            # 识别时间：优先使用 order.recognition_time（如果解析器/调用方已提供），否则使用当前 UTC unix 时间戳（秒）
+            # Feishu Date 字段通常要求 unix timestamp（毫秒）。
+                # 我们通过 _to_unix_timestamp 返回毫秒级整数，以兼容飞书要求。
+                "识别时间": self._to_unix_timestamp(getattr(order, "recognition_time", None)),
             "备注": getattr(order, "remark", "")
         }
 
@@ -122,18 +128,57 @@ class FeishuBitableClient:
     # 5. Summary（同样 Link）
     # =========================
     def create_summary_record(self, order: Any, order_record_id: str) -> str:
-        fields = {
-            "总数量": getattr(order, "total_quantity", 0),
-            "总净重": getattr(order, "net_weight", 0),
-            "总毛重": getattr(order, "gross_weight", 0),
-            "明细行数": getattr(order, "detail_count", 0),
-            "校验状态": getattr(order, "validation_status", "一致")
-        }
+        # 确保写入的数值字段为数字（去掉单位、千位符），若无法解析则不写入对应字段
+        fields = {}
+        tq = self._to_int(getattr(order, "total_quantity", None))
+        nw = self._to_float(getattr(order, "net_weight", None))
+        gw = self._to_float(getattr(order, "gross_weight", None))
+        dc = self._to_int(getattr(order, "detail_count", None))
+
+        if tq is not None:
+            fields["总数量"] = tq
+        if nw is not None:
+            fields["总净重"] = nw
+        if gw is not None:
+            fields["总毛重"] = gw
+        if dc is not None:
+            fields["明细行数"] = dc
+
+        fields["校验状态"] = getattr(order, "validation_status", "一致")
 
         # Link
         fields["关联订单ID"] = [order_record_id]
 
         return self.create_record(self.summary_table_id, fields)
+
+    def _to_int(self, v: Optional[Any]) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            if isinstance(v, int):
+                return v
+            s = str(v)
+            # 去掉逗号和单位
+            s2 = re.sub(r"[,\sA-Za-z%]+", "", s)
+            if s2 == "":
+                return None
+            return int(float(s2))
+        except Exception:
+            return None
+
+    def _to_float(self, v: Optional[Any]) -> Optional[float]:
+        if v is None:
+            return None
+        try:
+            if isinstance(v, (float, int)):
+                return float(v)
+            s = str(v)
+            s2 = re.sub(r"[,\sA-Za-z%]+", "", s)
+            if s2 == "":
+                return None
+            return float(s2)
+        except Exception:
+            return None
 
     # =========================
     # 6. 一键流水（工业级核心）
@@ -165,3 +210,61 @@ class FeishuBitableClient:
                 return k
 
         return "正文默认"
+
+    def _to_unix_timestamp(self, val: Optional[Any]) -> int:
+        """将多种形式的时间值转为 unix timestamp (秒)。
+
+        支持输入类型：int/float（视为 timestamp 秒）、datetime、字符串（ISO 或 '%Y-%m-%d %H:%M:%S'）。
+        若无法解析，返回当前 UTC 时间戳（秒）。
+        """
+        # 返回毫秒（int）
+        now_ts = int(datetime.datetime.utcnow().timestamp() * 1000)
+        if val is None:
+            return now_ts
+
+        # 已经是数字（秒或毫秒）
+        try:
+            if isinstance(val, (int, float)):
+                v = int(val)
+                # 如果看起来是秒（小于 10^11），转为毫秒；否则视为毫秒
+                if v < 1e11:
+                    return int(v * 1000)
+                return v
+        except Exception:
+            pass
+
+        # datetime
+        try:
+            if isinstance(val, datetime.datetime):
+                # 如果带 tzinfo，先转换为 UTC
+                if val.tzinfo is not None:
+                    val = val.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                return int(val.timestamp() * 1000)
+        except Exception:
+            pass
+
+        # 字符串解析：尝试 ISO，然后常见格式
+        try:
+            if isinstance(val, str):
+                s = val.strip()
+                # 尝试 ISO
+                try:
+                    dt = datetime.datetime.fromisoformat(s)
+                    if dt.tzinfo is not None:
+                        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                    return int(dt.timestamp() * 1000)
+                except Exception:
+                    pass
+
+                # 常见格式 '%Y-%m-%d %H:%M:%S'
+                try:
+                    dt = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+                    return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        # 无法解析则返回当前时间
+        return now_ts

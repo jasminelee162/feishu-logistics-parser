@@ -13,10 +13,12 @@ from parser.classifier import OrderClassifier
 from parser.abc_parser import ABCParser
 from parser.xyz_parser import XYZParser
 from parser.text_block_builder import TextBlockBuilder
-from validator.order_validator import OrderValidator
+from validator.order_validator import OrderValidator, validate_order
 from feishu.bitable_client import FeishuBitableClient
 from models.order_model import Order
 from dataclasses import asdict
+import json
+from pathlib import Path
 
 
 def main(pdf_path: str) -> int:
@@ -73,27 +75,45 @@ def main(pdf_path: str) -> int:
         # 未知类型，构造基础 Order 并返回
         order = Order(file_name=p.name, order_type="UNKNOWN")
 
-    # 校验
+    # 校验（validator 返回 List[Order]，以支持拆分或多结果）
     validator = OrderValidator()
-    order = validator.validate(order)
+    validated_orders = validator.validate(order, original_text=text)
 
-    # 打印结果（可替换为写入飞书多维表）
-    print("解析并校验后的订单: ")
-    print(asdict(order))
-
-    # 调用飞书客户端，传入 Order 对象（不转换为 dict）
+    # 调用飞书客户端
     feishu = FeishuBitableClient()
-    order_record_id = feishu.create_order_record(order)
-    if order_record_id:
-        print(f"飞书订单记录创建成功: {order_record_id}")
-    # 创建地址和汇总记录，分别与订单记录关联
-    addr_record_id = feishu.create_address_record(order, order_record_id)
 
-    if addr_record_id:
-        print(f"飞书地址记录创建成功: {addr_record_id}")
-    summary_record_id = feishu.create_summary_record(order, order_record_id)
-    if summary_record_id:
-        print(f"飞书汇总记录创建成功: {summary_record_id}")
+    # 输出目录（用于保存被拒写的异常记录）
+    errs_dir = Path("output/errors")
+    errs_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, ord_obj in enumerate(validated_orders):
+        print("解析并校验后的订单: ")
+        print(asdict(ord_obj))
+
+        flags = ord_obj.validation_flags or []
+        # 若检测到拒写标记（如重量物理矛盾），则不写入飞书并保存到本地供人工处理
+        if any(f.startswith("拒写") for f in flags):
+            print(f"订单被拒写，原因: {flags}")
+            outp = errs_dir / f"{p.stem}_rejected_{idx}.json"
+            with outp.open("w", encoding="utf-8") as fh:
+                json.dump(asdict(ord_obj), fh, ensure_ascii=False, indent=2)
+            continue
+
+        # 若需要人工复核或疑似异常，仍写入订单表，但打印提醒并在备注中保留标记
+        if any(f in ("需人工复核", "疑似异常", "类型未知") for f in flags):
+            ord_obj.remark = (ord_obj.remark or "") + " [自动标记：" + ",".join(flags) + "]"
+            print(f"注意：订单需人工复核或为疑似异常，标记={flags}")
+
+        # 正常写入飞书
+        order_record_id = feishu.create_order_record(ord_obj)
+        if order_record_id:
+            print(f"飞书订单记录创建成功: {order_record_id}")
+            addr_record_id = feishu.create_address_record(ord_obj, order_record_id)
+            if addr_record_id:
+                print(f"飞书地址记录创建成功: {addr_record_id}")
+            summary_record_id = feishu.create_summary_record(ord_obj, order_record_id)
+            if summary_record_id:
+                print(f"飞书汇总记录创建成功: {summary_record_id}")
 
     return 0
 
