@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 import logging
+from parser.text_normalizer import TextNormalizer
 
 try:
     import fitz  # PyMuPDF
@@ -116,7 +117,19 @@ class PDFReader:
                 self._logger.debug("[PDFReader] 关闭文档时发生异常（已忽略）")
 
         self._logger.info("[PDFReader] PDF读取完成 %s", file_path)
-        return "\n".join(texts)
+        raw = "\n".join(texts)
+
+        # 将 PyMuPDF 提取的原始文本通过 TextNormalizer 做预处理，修复常见的断行/空格/OCR 噪声问题
+        try:
+            normalizer = TextNormalizer()
+            normalized = normalizer.normalize(raw)
+            self._logger.info("[PDFReader] 文本规范化完成")
+        except Exception:
+            # 若规范化发生错误，不阻止主流程，返回原始文本
+            self._logger.exception("[PDFReader] 文本规范化失败，返回原始提取文本")
+            normalized = raw
+
+        return normalized
 
 
 def read_pdf_text(path: str) -> str:

@@ -12,6 +12,7 @@ from pdf.pdf_reader import PDFReader
 from parser.classifier import OrderClassifier
 from parser.abc_parser import ABCParser
 from parser.xyz_parser import XYZParser
+from parser.text_block_builder import TextBlockBuilder
 from validator.order_validator import OrderValidator
 from feishu.bitable_client import FeishuBitableClient
 from models.order_model import Order
@@ -47,6 +48,15 @@ def main(pdf_path: str) -> int:
     # ========== 调试代码结束 ==========
 
     # 分类
+    # 语义块恢复：在 Parser 之前修复地址/姓名等断裂问题
+    block_builder = TextBlockBuilder()
+    rebuilt = block_builder.build(text)
+    # 仅在调试时打印处理后片段（便于验证），这里保留有限输出
+    print("\n---- TextBlockBuilder: 处理后片段 (前3000字符) ----")
+    print(rebuilt[:3000])
+    text = rebuilt
+
+    # 分类（在文本恢复后进行）
     classifier = OrderClassifier()
     order_type = classifier.classify(text)
     print(f"检测到订单类型: {order_type}")
@@ -71,9 +81,19 @@ def main(pdf_path: str) -> int:
     print("解析并校验后的订单: ")
     print(asdict(order))
 
-    # 调用占位的飞书客户端（仅打印）
+    # 调用飞书客户端，传入 Order 对象（不转换为 dict）
     feishu = FeishuBitableClient()
-    feishu.create_order_record(order.to_dict() if hasattr(order, 'to_dict') else asdict(order))
+    order_record_id = feishu.create_order_record(order)
+    if order_record_id:
+        print(f"飞书订单记录创建成功: {order_record_id}")
+    # 创建地址和汇总记录，分别与订单记录关联
+    addr_record_id = feishu.create_address_record(order, order_record_id)
+
+    if addr_record_id:
+        print(f"飞书地址记录创建成功: {addr_record_id}")
+    summary_record_id = feishu.create_summary_record(order, order_record_id)
+    if summary_record_id:
+        print(f"飞书汇总记录创建成功: {summary_record_id}")
 
     return 0
 

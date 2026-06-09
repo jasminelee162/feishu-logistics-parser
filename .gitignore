@@ -1,0 +1,39 @@
+# Ignore local environment files and common Python artifacts
+# Do NOT commit secrets (API keys, tokens) in .env
+.env
+.env.*
+# Virtual environments
+venv/
+venv\
+.venv/
+env/
+ENV/
+pipenv
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# VS Code
+.vscode/
+# JetBrains
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Pytest cache
+.pytest_cache/
+
+# Logs and output
+*.log
+output/
+
+# Ignore local secret files
+secrets.yaml
