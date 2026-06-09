@@ -86,6 +86,8 @@ def main(pdf_path: str) -> int:
     errs_dir = Path("output/errors")
     errs_dir.mkdir(parents=True, exist_ok=True)
 
+    import uuid
+
     for idx, ord_obj in enumerate(validated_orders):
         print("解析并校验后的订单: ")
         print(asdict(ord_obj))
@@ -103,8 +105,28 @@ def main(pdf_path: str) -> int:
         if any(f in ("需人工复核", "疑似异常", "类型未知") for f in flags):
             ord_obj.remark = (ord_obj.remark or "") + " [自动标记：" + ",".join(flags) + "]"
             print(f"注意：订单需人工复核或为疑似异常，标记={flags}")
+        # 若订单为 UNKNOWN（或被标记为类型未知），只写入 UNKNOWN 表并跳过其他表
+        is_unknown = (getattr(ord_obj, "order_type", "") or "").upper() == "UNKNOWN" or any(f == "类型未知" for f in flags)
+        if is_unknown:
+            # 首先在 ORDER_TABLE 写入一条识别为需人工复合的订单记录
+            try:
+                order_record_id = feishu.create_order_record(ord_obj, recognition_status="需人工复合")
+                print(f"飞书订单记录创建成功 (需人工复合): {order_record_id}")
+            except Exception as exc:
+                # 若写入订单表失败，则生成一个本地关联 ID，继续写 UNKNOWN 表并保存回退
+                import time
+                order_record_id = f"local:{p.stem}:{idx}:{int(time.time()*1000)}"
+                print(f"写入订单表失败，使用本地关联ID: {order_record_id}, 错误: {exc}")
 
-        # 正常写入飞书
+            # 然后在 UNKNOWN 表中写入完整记录并关联到 order_record_id
+            try:
+                unknown_id = feishu.create_unknown_record(ord_obj, original_text=text, order_record_id=order_record_id)
+                print(f"飞书未知订单记录创建成功: {unknown_id}")
+            except Exception as exc:
+                print(f"写入未知表失败: {exc}")
+            continue
+
+        # 正常写入飞书（非 UNKNOWN）
         order_record_id = feishu.create_order_record(ord_obj)
         if order_record_id:
             print(f"飞书订单记录创建成功: {order_record_id}")

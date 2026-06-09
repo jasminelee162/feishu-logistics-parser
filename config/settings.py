@@ -22,8 +22,10 @@ SETTINGS = {
     "APP_SECRET": os.getenv("APP_SECRET", ""),
     "APP_TOKEN": os.getenv("APP_TOKEN", ""),
     "ORDER_TABLE_ID": os.getenv("ORDER_TABLE_ID", ""),
-    "ADDRESS_TABLE_ID": os.getenv("ADDRESS_TABLE_ID", ""),
-    "SUMMARY_TABLE_ID": os.getenv("SUMMARY_TABLE_ID", ""),
+        "ADDRESS_TABLE_ID": os.getenv("ADDRESS_TABLE_ID", ""),
+        "SUMMARY_TABLE_ID": os.getenv("SUMMARY_TABLE_ID", ""),
+        "UNKNOWN_TABLE_ID": os.getenv("UNKNOWN_TABLE_ID", ""),
+    "SUMMARY_ALLOWED_FIELDS": os.getenv("SUMMARY_ALLOWED_FIELDS", ""),
 }
 
 
@@ -66,4 +68,6 @@ def load_settings() -> dict:
         "ORDER_TABLE_ID": os.getenv("ORDER_TABLE_ID", ""),
         "ADDRESS_TABLE_ID": os.getenv("ADDRESS_TABLE_ID", ""),
         "SUMMARY_TABLE_ID": os.getenv("SUMMARY_TABLE_ID", ""),
+        "UNKNOWN_TABLE_ID": os.getenv("UNKNOWN_TABLE_ID", ""),
+        "SUMMARY_ALLOWED_FIELDS": os.getenv("SUMMARY_ALLOWED_FIELDS", ""),
     }

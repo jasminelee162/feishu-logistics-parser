@@ -81,9 +81,19 @@ class OrderValidator:
             except Exception:
                 continue
 
-        # 如果有明细行数量，将明细计数定义为明细行的数量之和（便于与总数量比对）
-        if items_with_qty > 0:
-            order.detail_count = sum_qty
+        # 明细行数按商品种类数（不同 SKU 数量）定义，而非明细数量之和
+        distinct_skus = set()
+        for it in getattr(order, 'items', []):
+            try:
+                if it.sku:
+                    distinct_skus.add(str(it.sku).strip())
+            except Exception:
+                continue
+
+        # Respect parser-provided detail_count if present (parser may use batch count),
+        # otherwise fall back to distinct SKU count.
+        if order.detail_count is None and len(getattr(order, 'items', [])) > 0:
+            order.detail_count = len(distinct_skus)
 
         if order.total_quantity is not None and items_with_qty > 0:
             try:

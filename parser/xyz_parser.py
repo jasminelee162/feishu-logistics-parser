@@ -284,19 +284,27 @@ class XYZParser:
 
             order.items.append(OrderItem(sku=code, qty=qty))
 
-        # 明细行数按所有明细的数量之和定义（若 qty 可用则求和）
-        sum_qty = 0
-        qty_found = False
+        # 明细行数按商品种类数（不同 SKU 数量）定义。但在某些单据中，
+        # SKU 可能只出现一次而同一商品存在多个批号/批次，导致 SKU 数为 1
+        # 但实际明细为多个（例如多个批号各自对应一件商品）。因此同时检测
+        # `批号` 出现次数，并取两者的最大值作为明细行数。
+        distinct_skus = []
         for it in order.items:
-            if it.qty is not None:
-                sum_qty += int(it.qty)
-                qty_found = True
+            sku = (it.sku or "").strip()
+            if sku and sku not in distinct_skus:
+                distinct_skus.append(sku)
 
-        if qty_found:
-            order.detail_count = sum_qty
-        else:
-            # 退回兼容行为：若没有 qty 信息，仍保持为不同商品种类数（兼容旧逻辑）
-            order.detail_count = len(unique_products)
+        # 检测批号（例如: 批号JX0507457）并尝试从批号附近提取件数
+        batch_ids = []
+        for m in re.finditer(r"批号\s*([A-Za-z0-9\-]+)", text):
+            bid = m.group(1).strip()
+            if bid:
+                batch_ids.append(bid)
+
+        batch_count = len(batch_ids)
+
+        # 取 SKU 数与批号数的最大值，确保像示例中那样被识别为 2
+        order.detail_count = max(len(distinct_skus), batch_count)
         
         # ========== 详细日志输出（便于调试） ==========
         logger.info("[XYZParser] ========== 解析结果汇总 ==========")
@@ -305,7 +313,7 @@ class XYZParser:
         logger.info("[XYZParser] 收货人: %s", order.receiver_name)
         logger.info("[XYZParser] 联系电话: %s", order.phone)
         logger.info("[XYZParser] 产品编码列表: %s", unique_products)
-        logger.info("[XYZParser] 产品编码数量: %d", order.detail_count)
+        logger.info("[XYZParser] 产品编码数量(商品种类数): %d (SKU=%d, 批号=%d)", order.detail_count, len(distinct_skus), batch_count)
         logger.info("[XYZParser] ====================================")
 
         return order
